@@ -23,7 +23,7 @@ Cada entorno declara 16 recursos: EKS 1.36, roles propios, API privada accesible
 
 `feature/* → PR develop → checks → merge/plan development → apply manual`. El usuario decide avanzar mediante PR `develop → qa` y después `qa → main`. Cada destino genera **su propio plan**; nunca se aplica el plan de otro entorno.
 
-Se crearon ramas locales develop/qa desde el HEAD existente, sin checkout ni commits. Los cambios siguen en el working tree; falta revisar, actualizar/publicar ramas y configurar protección/revisores remotos.
+Las ramas develop, qa y main están publicadas con la configuración de sus respectivos entornos. Falta configurar protección/revisores remotos.
 
 ## Workflows
 
@@ -66,7 +66,7 @@ Push a develop/qa/main o ejecución manual genera plan solo con `AWS_DEPLOY_ENAB
 
 ## Estado y validación
 
-Preparado localmente, **sin despliegue AWS**. El bootstrap debe crear los buckets QA/production y aplicar sus permisos/OIDC actualizados; requiere recuperar su estado existente. La CLI local no tiene credenciales y los nodos de herramientas presentaron fallo de cuota Fleet. No habilitar el workflow remoto antiguo, que aún contiene apply automático.
+Código publicado, **sin despliegue AWS**. El bootstrap debe crear los buckets QA/production y aplicar sus permisos/OIDC actualizados; requiere recuperar su estado existente. La CLI local no tiene credenciales y los nodos de herramientas presentaron fallo de cuota Fleet. El workflow publicado separa plan y aprobación manual del apply; AWS_DEPLOY_ENABLED permanece sin habilitar.
 
 Se validaron los tres roots, tres planes simulados y controles de aprobación. Los mocks no comprueban cuotas, permisos ni conectividad AWS. Comprobar la clave histórica `microservicio/terraform.tfstate` antes del primer apply; no se migró ni eliminó automáticamente.
 
