@@ -1,20 +1,21 @@
-name: Planificar y aplicar infraestructura
+name: Validar y guardar plan de infraestructura
 
 on:
   push:
-    branches: [main]
+    branches: [develop, qa, main]
   pull_request:
-    branches: [main]
+    branches: [develop, qa, main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: terraform-microservicio
+  group: terraform-microservicio-${{ github.ref_name }}
   cancel-in-progress: false
 
 env:
+  TARGET_ENVIRONMENT: ${{ github.ref_name == 'develop' && 'development' || github.ref_name == 'qa' && 'qa' || 'production' }}
   TF_IN_AUTOMATION: "true"
   TF_INPUT: "false"
   TF_WORKSPACE: default
@@ -33,12 +34,26 @@ jobs:
           terraform_version: 1.15.9
           terraform_wrapper: false
       - run: terraform fmt -check -recursive -diff
-      - run: terraform init -backend=false -input=false -lockfile=readonly
-      - run: terraform validate
+      - name: Inicializar los tres entornos sin backend
+        run: |
+          terraform init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=environments/development init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=environments/qa init -backend=false -input=false -lockfile=readonly
+          terraform -chdir=environments/production init -backend=false -input=false -lockfile=readonly
+      - name: Validar los tres entornos y probar su independencia
+        run: |
+          terraform -chdir=environments/development validate
+          terraform -chdir=environments/qa validate
+          terraform -chdir=environments/production validate
+          terraform test -no-color
+      - run: python3 scripts/test_approved_plan.py
 
-  deploy:
+  plan:
+    defaults:
+      run:
+        working-directory: environments/${{ github.ref_name == 'develop' && 'development' || github.ref_name == 'qa' && 'qa' || 'production' }}
     needs: checks
-    if: vars.AWS_DEPLOY_ENABLED == 'true' && github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    if: vars.AWS_DEPLOY_ENABLED == 'true' && contains(fromJSON('["develop","qa","main"]'), github.ref_name) && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
@@ -83,7 +98,7 @@ jobs:
           from pathlib import Path
           def aws(*args):
               return json.loads(subprocess.check_output(["aws", *args, "--output", "json"], text=True))
-          fixed = json.loads(Path(".github/catalogo-verificado.json").read_text())
+          fixed = json.loads(Path("../../.github/catalogo-verificado.json").read_text())
           for name, version in fixed["addons"].items():
               data = aws("eks", "describe-addon-versions", "--kubernetes-version", fixed["kubernetes"], "--addon-name", name)
               versions = [v for a in data["addons"] for v in a["addonVersions"]]
@@ -133,7 +148,7 @@ jobs:
           import subprocess
           from pathlib import Path
           plan = json.loads(subprocess.check_output(["terraform", "show", "-json", "infra.tfplan"], text=True))
-          expected = set(json.loads(Path(".github/recursos-autorizados.json").read_text()))
+          expected = set(json.loads(Path("../../.github/recursos-autorizados.json").read_text()))
           counts = {"create": 0, "no-op": 0}
           for change in plan.get("resource_changes", []):
               if change.get("mode") == "data":
@@ -151,74 +166,16 @@ jobs:
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
               summary.write(text + "\n")
           PY
+      - name: Registrar commit y SHA-256 del plan
+        run: python3 ../../scripts/approved_plan.py record
       - name: Guardar plan privado para revisión
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: terraform-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          name: terraform-plan-${{ env.TARGET_ENVIRONMENT }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            infra.tfplan
-            plan.log
-          if-no-files-found: ignore
-          retention-days: 1
-      - name: Comprobar main antes de aplicar
-        run: |
-          head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)"
-          test "$head" = "$GITHUB_SHA"
-      - name: Aplicar el mismo plan guardado
-        shell: bash
-        run: |
-          umask 077
-          set -o pipefail
-          set +e
-          terraform apply -no-color -input=false -lock-timeout=5m infra.tfplan 2>&1 | tee apply.log
-          codes=("${PIPESTATUS[@]}")
-          set -e
-          echo "Terraform exit code: ${codes[0]}; tee exit code: ${codes[1]}"
-          if [ "${codes[0]}" -ne 0 ]; then exit "${codes[0]}"; fi
-          if [ "${codes[1]}" -ne 0 ]; then exit "${codes[1]}"; fi
-          python3 - <<'PY'
-          import os
-          import re
-          from pathlib import Path
-          content = Path("apply.log").read_text()
-          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-              for text in re.findall(r"Apply complete! Resources: [^\n]+", content):
-                  summary.write(text + "\n")
-          PY
-      - name: Verificar infraestructura desplegada
-        run: |
-          python3 - <<'PY'
-          import json
-          import subprocess
-          def aws(*args):
-              return json.loads(subprocess.check_output(["aws", *args, "--output", "json"], text=True))
-          name = "prueba-devops-microservicio"
-          cluster = aws("eks", "describe-cluster", "--name", name)["cluster"]
-          assert cluster["status"] == "ACTIVE"
-          assert cluster["version"] == "1.36"
-          assert cluster["resourcesVpcConfig"]["endpointPrivateAccess"]
-          assert not cluster["resourcesVpcConfig"]["endpointPublicAccess"]
-          print("Clúster ACTIVE, Kubernetes1.36, API solo privada.")
-          for node_name, instance in [("microservicio", "t3.medium")]:
-              node = aws("eks", "describe-nodegroup", "--cluster-name", name, "--nodegroup-name", node_name)["nodegroup"]
-              assert node["status"] == "ACTIVE" and not node.get("health", {}).get("issues")
-              assert node["instanceTypes"] == [instance]
-              assert node["scalingConfig"] == {"minSize": 1, "maxSize": 1, "desiredSize": 1}
-              assert node["releaseVersion"] == "1.36.4-20261003"
-              print(node_name + ": ACTIVE, " + instance + ", un nodo, AMI fijada.")
-          for addon_name in ["eks-pod-identity-agent", "vpc-cni"]:
-              addon = aws("eks", "describe-addon", "--cluster-name", name, "--addon-name", addon_name)["addon"]
-              assert addon["status"] == "ACTIVE" and not addon.get("health", {}).get("issues")
-              print(addon_name + ": ACTIVE, " + addon["addonVersion"])
-          PY
-      - name: Guardar diagnóstico privado de apply
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: terraform-diagnostico-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            apply.log
-            errored.tfstate
+            environments/${{ env.TARGET_ENVIRONMENT }}/infra.tfplan
+            environments/${{ env.TARGET_ENVIRONMENT }}/plan-metadata.json
+            environments/${{ env.TARGET_ENVIRONMENT }}/plan.log
           if-no-files-found: ignore
           retention-days: 1

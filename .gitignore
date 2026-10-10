@@ -21,3 +21,8 @@ crash.*.log
 kubeconfig*
 
 # .terraform.lock.hcl se conserva en Git para fijar providers y checksums.
+
+.approved-plan/
+plan-metadata.json
+__pycache__/
+*.pyc

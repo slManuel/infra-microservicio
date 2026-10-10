@@ -1,20 +1,73 @@
-# Infraestructura EKS del microservicio
+# Infraestructura del microservicio
 
-Segundo clúster de la evaluación: `prueba-devops-microservicio`, Kubernetes1.36, API exclusivamente privada, un nodo t3.medium AL2023 en us-east-1a. Reutiliza VPC/subredes de `infra-red-compartida` mediante estado remoto S3. No se aplicó todavía; 16 recursos administrados definidos explícitamente, sin locals/for/for_each/dynamic.
+Prepara tres EKS privados distintos para la aplicación Java. Reutiliza la red y Jenkins/Vault compartidos; no instala la aplicación.
 
-| Módulo | Responsabilidad |
+| Rama | Root Terraform | Clúster | Bucket de estado |
+|---|---|---|---|
+| `develop` | [`environments/development/`](environments/development/) | `prueba-devops-microservicio-development` | `tfstate-prueba-cuscatlan-oct2026-jose-manuel-solis` |
+| `qa` | [`environments/qa/`](environments/qa/) | `prueba-devops-microservicio-qa` | `tfstate-prueba-cuscatlan-oct2026-jose-manuel-solis-qa` |
+| `main` | [`environments/production/`](environments/production/) | `prueba-devops-microservicio-production` | `tfstate-prueba-cuscatlan-oct2026-jose-manuel-solis-production` |
+
+Cada bucket guarda `microservicio/<entorno>/terraform.tfstate`, con cifrado y bloqueo independiente.
+
+## Carpetas
+
+- `environments/`: tres puntos de entrada, cada uno con backend, provider, variables, outputs y lockfile.
+- Raíz (`main.tf`, `data.tf`, `variables.tf`): módulo común llamado por los tres roots; no desplegar desde aquí.
+- `modules/iam_roles`, `cluster`, `red_pods`, `nodos`: identidades, EKS/acceso privado, CNI/Pod Identity y workers.
+- `.github/workflows`, `scripts`, `tests`: checks, plan/apply manual y controles probados con mocks.
+
+Cada entorno declara 16 recursos: EKS 1.36, roles propios, API privada accesible desde Jenkins, dos add-ons y un nodo `t3.medium` con 20 GiB gp3 cifrado. Clústeres, roles, node groups, plantillas y estados tienen nombres distintos. Los tres sumarían 48 recursos, tres control planes y tres nodos con costo recurrente. Un nodo por entorno no ofrece HA. Terraform es explícito, sin locals/for/for_each.
+
+## Flujo
+
+`feature/* → PR develop → checks → merge/plan development → apply manual`. El usuario decide avanzar mediante PR `develop → qa` y después `qa → main`. Cada destino genera **su propio plan**; nunca se aplica el plan de otro entorno.
+
+Se crearon ramas locales develop/qa desde el HEAD existente, sin checkout ni commits. Los cambios siguen en el working tree; falta revisar, actualizar/publicar ramas y configurar protección/revisores remotos.
+
+## Workflows
+
+**2 workflows, 3 jobs, 24 pasos:** `terraform.yml` tiene checks (6) → plan (9); `terraform-apply.yml` tiene apply (9).
+
+Push a develop/qa/main o ejecución manual genera plan solo con `AWS_DEPLOY_ENABLED=true`. PR hacia esas ramas solo valida los tres roots, sin OIDC. Apply requiere ejecución manual en la rama correspondiente y el ID del run, commit vigente y SHA-256 del plan. Comprueba también rama, entorno, bucket y clave; no vuelve a planificar. Plan/apply se serializan por rama; artefactos privados duran un día.
+
+| Job `checks`: paso | Función |
 |---|---|
-| identidad_base | Roles IAM EKS/nodos y asociaciones de políticas |
-| cluster | EKS, acceso del administrador existente y entrada TCP443 al API desde SG tools |
-| red_pods | CNI, Pod Identity Agent, rol y asociación CNI antes de nodos |
-| nodos | Launch template cifrado/IMDSv2 y node group único |
+| 1. Checkout | Obtiene el código. |
+| 2. Setup Terraform | Instala Terraform 1.15.9. |
+| 3. Comprobar formato | Revisa el formato de raíz y módulos sin modificar archivos. |
+| 4. Inicializar sin backend | Prepara módulo común y los tres roots sin backend, con lockfiles de proveedores fijos. |
+| 5. Validar | Valida los tres roots y prueba con mocks que clústeres/node groups son distintos. |
+| 6. Probar aprobación | Ejecuta las pruebas del control de planes aprobados. |
 
-Estado S3: bucket protegido `tfstate-prueba-cuscatlan-oct2026-jose-manuel-solis`, clave `microservicio/terraform.tfstate`, cifrado y bloqueo S3. Nunca copiar otro estado sobre esta clave. El workflow OIDC conserva rol/subject actuales; valida catálogo fijado, subredes, plan guardado y allowlist exacta. Rechaza updates, deletes y replacements en el alcance inicial; aplica **el mismo** plan y valida main antes. Logs muestran salida/exit code original; planes y diagnósticos privados retención 1 día, no publicar estados.
+| Job `plan`: paso | Función |
+|---|---|
+| 1. Checkout | Obtiene el código. |
+| 2. Setup Terraform | Instala Terraform 1.15.9. |
+| 3. Autenticación OIDC | Asume el rol AWS del proyecto con credenciales temporales. |
+| 4. Comprobar rol vinculado | Comprueba su lectura y distingue un rol ausente de un acceso denegado. |
+| 5. Comprobar catálogo y subredes | Verifica versiones de add-ons, AMI y subredes privadas contra el estado de red. |
+| 6. Inicializar y validar | Conecta con el backend S3 y valida sin modificar el lockfile. |
+| 7. Planificar y comprobar alcance | Guarda plan/log y solo admite los recursos autorizados con acciones create/no-op. |
+| 8. Registrar plan | Registra rama, entorno, bucket, clave S3, ID del run, intento, commit y SHA-256 del plan. |
+| 9. Guardar plan privado | Incluso ante fallo, intenta conservar plan, metadatos y log disponibles durante 1 día. |
 
-Temporalmente sólo checks: `AWS_DEPLOY_ENABLED` debe ser `true` para permitir deploy. Mantener ausente/false mientras AWS bloquea EC2/Fleet. No activar ni relanzar hasta resolver soporte y autorizar reanudación. La regla de API privada necesita la ampliación estrecha de IAM preparada en el bootstrap; su aplicación está pendiente con el estado bootstrap existente, nunca estado vacío. No se cambia la API a pública ni se crea administrador EC2.
+| Job `apply`: paso | Función |
+|---|---|
+| 1. Checkout | Obtiene el código. |
+| 2. Setup Terraform | Instala Terraform 1.15.9. |
+| 3. Verificar aprobación y descargar | Comprueba origen, ejecución exitosa, commit vigente de la rama, intento, metadatos, entorno, bucket, clave S3 y hash del plan elegido. Rechaza un plan de otro entorno. |
+| 4. Autenticación OIDC | Asume el rol AWS del proyecto con credenciales temporales. |
+| 5. Inicializar y validar | Conecta con el backend existente y valida sin modificar el lockfile. |
+| 6. Comprobar rama | Verifica de nuevo que la rama elegida apunta al commit de la ejecución. |
+| 7. Aplicar plan guardado | Aplica el archivo aprobado sin generar otro plan y registra el resultado. |
+| 8. Verificar infraestructura | Comprueba por API AWS clúster privado, grupos de nodos y add-ons activos; no valida pods. |
+| 9. Guardar diagnóstico | Incluso ante fallo, intenta conservar apply.log y errored.tfstate disponibles durante 1 día. |
 
-Validación local: `terraform fmt -check -recursive`, `terraform init -backend=false -lockfile=readonly`, `terraform validate`. Éxito de validate no prueba permisos, catálogo vivo, cuotas o creación de recursos. El catálogo AWS6.68.0/TF1.15.9/AMI/addons se verificó previamente para herramientas; el workflow vuelve a comprobar compatibilidad antes del plan real.
+## Estado y validación
 
-Aplicación y micro: [despliegue Jenkins/Vault](https://github.com/slManuel/despliegue-jenkins-vault) y [servicio Java](https://github.com/slManuel/devops-java-service). Los manifiestos de aplicación son propios, sin Helm. VSO/CSI vienen de upstream versionado y se instalan en el segundo clúster mediante Kustomize.
+Preparado localmente, **sin despliegue AWS**. El bootstrap debe crear los buckets QA/production y aplicar sus permisos/OIDC actualizados; requiere recuperar su estado existente. La CLI local no tiene credenciales y los nodos de herramientas presentaron fallo de cuota Fleet. No habilitar el workflow remoto antiguo, que aún contiene apply automático.
 
-Los recursos, NLB de aplicación y conectividad privada requieren validación real después de desbloquear AWS. Dos réplicas sobre un solo nodo no dan tolerancia a la pérdida de nodo; configuración de evaluación, no HA de producción.
+Se validaron los tres roots, tres planes simulados y controles de aprobación. Los mocks no comprueban cuotas, permisos ni conectividad AWS. Comprobar la clave histórica `microservicio/terraform.tfstate` antes del primer apply; no se migró ni eliminó automáticamente.
+
+Las [capturas anteriores](imágenes/) muestran [checks con deploy omitido](imágenes/01-github-checks-correctos-despliegue-omitido.jpg) y [solo herramientas en us-east-1](imágenes/02-aws-cluster-microservicio-no-listado-us-east-1.jpg), no los tres entornos funcionando.

@@ -15,3 +15,9 @@ variable "administrator_principal_arn" {
   type        = string
   nullable    = false
 }
+
+variable "cluster_name" {
+  description = "Nombre exclusivo del clúster del entorno."
+  type        = string
+  nullable    = false
+}

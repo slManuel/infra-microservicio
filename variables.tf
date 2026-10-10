@@ -1,21 +1,43 @@
-variable "aws_region" {
-  description = "Región del laboratorio; mantener alineada con el presupuesto."
-  type        = string
-  default     = "us-east-1"
-
-  validation {
-    condition     = var.aws_region == "us-east-1"
-    error_message = "Este laboratorio se ha presupuestado en us-east-1. Revisar costos y diseño antes de habilitar otra región."
-  }
-}
-
-variable "aws_account_id" {
-  description = "ID de 12 dígitos de la cuenta autorizada para el laboratorio. No es una contraseña."
+variable "environment" {
+  description = "Entorno que posee estos recursos; no comparte estado con otros entornos."
   type        = string
   nullable    = false
 
   validation {
-    condition     = can(regex("^[0-9]{12}$", var.aws_account_id))
-    error_message = "El identificador de cuenta debe contener exactamente 12 dígitos."
+    condition     = contains(["development", "qa", "production"], var.environment)
+    error_message = "El entorno debe ser development, qa o production."
+  }
+}
+
+variable "cluster_name" {
+  description = "Nombre exclusivo del clúster y prefijo de sus roles y plantillas."
+  type        = string
+  nullable    = false
+
+  validation {
+    condition     = var.cluster_name == "prueba-devops-microservicio-${var.environment}"
+    error_message = "El nombre debe coincidir con prueba-devops-microservicio-<entorno>."
+  }
+}
+
+variable "node_instance_type" {
+  description = "Tipo de nodo fijado para este laboratorio."
+  type        = string
+  nullable    = false
+
+  validation {
+    condition     = var.node_instance_type == "t3.medium"
+    error_message = "El alcance autorizado mantiene t3.medium."
+  }
+}
+
+variable "node_disk_size_gib" {
+  description = "Disco gp3 cifrado del nodo, en GiB."
+  type        = number
+  nullable    = false
+
+  validation {
+    condition     = var.node_disk_size_gib == 20
+    error_message = "El alcance autorizado mantiene 20 GiB por nodo."
   }
 }

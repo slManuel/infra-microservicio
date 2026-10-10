@@ -1,3 +1,3 @@
 # cluster
 
-EKS privado1.36 y access entry del administrador existente. Regla TCP443 referenciada al SG tools para que Jenkins alcance el API micro; no CIDR público.
+EKS privado Kubernetes 1.36 y acceso del administrador existente. Recibe el nombre exclusivo del entorno; EKS crea su propio SG y se añade una regla TCP 443 desde el SG compartido de Jenkins, sin CIDR público.

@@ -1,5 +1,5 @@
 resource "aws_iam_role" "rol_cluster_eks" {
-  name = "prueba-devops-microservicio-cluster"
+  name = "${var.cluster_name}-cluster"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -21,7 +21,7 @@ resource "aws_iam_role_policy_attachment" "permisos_cluster_eks" {
 }
 
 resource "aws_iam_role" "rol_nodos_eks" {
-  name = "prueba-devops-microservicio-nodos"
+  name = "${var.cluster_name}-nodos"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"

@@ -1,0 +1,133 @@
+name: Aplicar plan aprobado manualmente
+
+on:
+  workflow_dispatch:
+    inputs:
+      plan_run_id:
+        description: ID de la ejecución exitosa que guardó el plan
+        type: string
+        required: true
+      plan_commit:
+        description: Commit completo del plan (debe seguir siendo la cabeza de la rama elegida)
+        type: string
+        required: true
+      plan_sha256:
+        description: SHA-256 exacto del archivo infra.tfplan revisado
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-microservicio-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TARGET_ENVIRONMENT: ${{ github.ref_name == 'develop' && 'development' || github.ref_name == 'qa' && 'qa' || 'production' }}
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  TF_WORKSPACE: default
+  TF_VAR_aws_account_id: "022907376152"
+  AWS_REGION: us-east-1
+  AWS_DEFAULT_REGION: us-east-1
+  AWS_PAGER: ""
+
+
+jobs:
+  apply:
+    defaults:
+      run:
+        working-directory: environments/${{ github.ref_name == 'develop' && 'development' || github.ref_name == 'qa' && 'qa' || 'production' }}
+    if: vars.AWS_DEPLOY_ENABLED == 'true' && contains(fromJSON('["develop","qa","main"]'), github.ref_name)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      APPROVED_RUN_ID: ${{ inputs.plan_run_id }}
+      APPROVED_COMMIT: ${{ inputs.plan_commit }}
+      APPROVED_SHA256: ${{ inputs.plan_sha256 }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3
+        with:
+          terraform_version: 1.15.9
+          terraform_wrapper: false
+      - name: Verificar aprobación y descargar plan exacto
+        run: python3 ../../scripts/approved_plan.py fetch
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::022907376152:role/prueba-devops-github-actions-microservicio
+          aws-region: us-east-1
+          allowed-account-ids: "022907376152"
+          role-session-name: microservicio-${{ github.run_id }}
+      - name: Inicializar backend existente y validar
+        run: |
+          terraform init -input=false -lockfile=readonly
+          terraform validate
+      - name: Comprobar rama antes de aplicar
+        run: |
+          head="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$GITHUB_REF_NAME" --jq .object.sha)"
+          test "$head" = "$GITHUB_SHA"
+      - name: Aplicar el mismo plan guardado
+        shell: bash
+        run: |
+          umask 077
+          set -o pipefail
+          set +e
+          terraform apply -no-color -input=false -lock-timeout=5m .approved-plan/infra.tfplan 2>&1 | tee apply.log
+          codes=("${PIPESTATUS[@]}")
+          set -e
+          echo "Terraform exit code: ${codes[0]}; tee exit code: ${codes[1]}"
+          if [ "${codes[0]}" -ne 0 ]; then exit "${codes[0]}"; fi
+          if [ "${codes[1]}" -ne 0 ]; then exit "${codes[1]}"; fi
+          python3 - <<'PY'
+          import os
+          import re
+          from pathlib import Path
+          content = Path("apply.log").read_text()
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
+              for text in re.findall(r"Apply complete! Resources: [^\n]+", content):
+                  summary.write(text + "\n")
+          PY
+      - name: Verificar infraestructura desplegada
+        run: |
+          python3 - <<'PY'
+          import json
+          import subprocess
+          def aws(*args):
+              return json.loads(subprocess.check_output(["aws", *args, "--output", "json"], text=True))
+          name = subprocess.check_output(["terraform", "output", "-raw", "cluster_name"], text=True)
+          node_name = subprocess.check_output(["terraform", "output", "-raw", "node_group_name"], text=True)
+          cluster = aws("eks", "describe-cluster", "--name", name)["cluster"]
+          assert cluster["status"] == "ACTIVE"
+          assert cluster["version"] == "1.36"
+          assert cluster["resourcesVpcConfig"]["endpointPrivateAccess"]
+          assert not cluster["resourcesVpcConfig"]["endpointPublicAccess"]
+          print("Clúster ACTIVE, Kubernetes1.36, API solo privada.")
+          for node_name, instance in [(node_name, "t3.medium")]:
+              node = aws("eks", "describe-nodegroup", "--cluster-name", name, "--nodegroup-name", node_name)["nodegroup"]
+              assert node["status"] == "ACTIVE" and not node.get("health", {}).get("issues")
+              assert node["instanceTypes"] == [instance]
+              assert node["scalingConfig"] == {"minSize": 1, "maxSize": 1, "desiredSize": 1}
+              assert node["releaseVersion"] == "1.36.4-20261003"
+              print(node_name + ": ACTIVE, " + instance + ", un nodo, AMI fijada.")
+          for addon_name in ["eks-pod-identity-agent", "vpc-cni"]:
+              addon = aws("eks", "describe-addon", "--cluster-name", name, "--addon-name", addon_name)["addon"]
+              assert addon["status"] == "ACTIVE" and not addon.get("health", {}).get("issues")
+              print(addon_name + ": ACTIVE, " + addon["addonVersion"])
+          PY
+      - name: Guardar diagnóstico privado de apply
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: terraform-diagnostico-${{ env.TARGET_ENVIRONMENT }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            environments/${{ env.TARGET_ENVIRONMENT }}/apply.log
+            environments/${{ env.TARGET_ENVIRONMENT }}/errored.tfstate
+          if-no-files-found: ignore
+          retention-days: 1

@@ -8,5 +8,5 @@ resource "aws_vpc_security_group_ingress_rule" "api_desde_jenkins" {
   ip_protocol                  = "tcp"
   from_port                    = 443
   to_port                      = 443
-  description                  = "Jenkins en VPC compartida hacia API privada development"
+  description                  = "Jenkins en VPC compartida hacia API privada ${var.cluster_name}"
 }

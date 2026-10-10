@@ -21,3 +21,15 @@ variable "private_subnet_ids_by_az" {
   type        = map(string)
   nullable    = false
 }
+
+variable "instance_type" {
+  description = "Tipo de instancia del nodo del entorno."
+  type        = string
+  nullable    = false
+}
+
+variable "disk_size_gib" {
+  description = "Tamaño del disco gp3 cifrado en GiB."
+  type        = number
+  nullable    = false
+}

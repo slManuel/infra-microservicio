@@ -1,5 +1,5 @@
 resource "aws_launch_template" "microservicio" {
-  name_prefix = "prueba-devops-microservicio-"
+  name_prefix = "${var.cluster_name}-"
 
   credit_specification {
     cpu_credits = "standard"
@@ -15,7 +15,7 @@ resource "aws_launch_template" "microservicio" {
     device_name = "/dev/xvda"
 
     ebs {
-      volume_size           = 20
+      volume_size           = var.disk_size_gib
       volume_type           = "gp3"
       encrypted             = true
       delete_on_termination = true
@@ -25,7 +25,7 @@ resource "aws_launch_template" "microservicio" {
 
 resource "aws_eks_node_group" "microservicio" {
   cluster_name    = var.cluster_name
-  node_group_name = "microservicio"
+  node_group_name = "${var.cluster_name}-nodos"
   node_role_arn   = var.node_role_arn
 
   subnet_ids = [
@@ -36,7 +36,7 @@ resource "aws_eks_node_group" "microservicio" {
   ami_type        = "AL2023_x86_64_STANDARD"
   release_version = "1.36.4-20261003"
   capacity_type   = "ON_DEMAND"
-  instance_types  = ["t3.medium"]
+  instance_types  = [var.instance_type]
 
   scaling_config {
     desired_size = 1

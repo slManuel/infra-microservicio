@@ -1,5 +1,5 @@
 resource "aws_eks_cluster" "cluster_microservicio" {
-  name     = "prueba-devops-microservicio"
+  name     = var.cluster_name
   role_arn = var.cluster_role_arn
   version  = "1.36"
 

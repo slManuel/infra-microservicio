@@ -1,5 +1,5 @@
 resource "aws_iam_role" "rol_vpc_cni" {
-  name = "prueba-devops-microservicio-vpc-cni"
+  name = "${var.cluster_name}-vpc-cni"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
