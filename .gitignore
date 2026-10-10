@@ -1,0 +1,23 @@
+# Dependencias descargadas y configuración local de Terraform.
+.terraform/
+*.tfvars
+*.tfvars.json
+.terraformrc
+terraform.rc
+
+# Estado y planes: pueden contener datos sensibles.
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+
+# Credenciales y archivos locales.
+.env
+.env.*
+*.pem
+*.key
+kubeconfig*
+
+# .terraform.lock.hcl se conserva en Git para fijar providers y checksums.

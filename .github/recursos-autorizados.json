@@ -1,0 +1,18 @@
+[
+  "module.cluster.aws_eks_access_entry.administrador",
+  "module.cluster.aws_eks_access_policy_association.administrador",
+  "module.cluster.aws_eks_cluster.cluster_microservicio",
+  "module.cluster.aws_vpc_security_group_ingress_rule.api_desde_jenkins",
+  "module.identidad_base.aws_iam_role.rol_cluster_eks",
+  "module.identidad_base.aws_iam_role.rol_nodos_eks",
+  "module.identidad_base.aws_iam_role_policy_attachment.descarga_imagenes_nodos",
+  "module.identidad_base.aws_iam_role_policy_attachment.permisos_cluster_eks",
+  "module.identidad_base.aws_iam_role_policy_attachment.permisos_nodos_eks",
+  "module.nodos.aws_eks_node_group.microservicio",
+  "module.nodos.aws_launch_template.microservicio",
+  "module.red_pods.aws_eks_addon.pod_identity_agent",
+  "module.red_pods.aws_eks_addon.vpc_cni",
+  "module.red_pods.aws_eks_pod_identity_association.vpc_cni",
+  "module.red_pods.aws_iam_role.rol_vpc_cni",
+  "module.red_pods.aws_iam_role_policy_attachment.permisos_vpc_cni"
+]

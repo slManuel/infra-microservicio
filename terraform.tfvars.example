@@ -1,0 +1,4 @@
+# Copiar a terraform.tfvars y completar localmente antes de planificar.
+# Valor ficticio: sustituir por la cuenta autorizada, sin añadir credenciales.
+aws_account_id = "000000000000"
+aws_region     = "us-east-1"
